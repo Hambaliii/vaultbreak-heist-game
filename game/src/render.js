@@ -1,6 +1,7 @@
 // render.js - all canvas drawing for VAULTBREAK.
 
 import { WALLS, COVER, CAMERAS, ROOM_LABELS, VAULT_DOOR, VAULT_TARGET, PANEL, VAN } from "./level.js";
+import { conePolygon } from "./vision.js";
 
 export const COLOURS = {
   floorA: "#1c2331",
@@ -164,13 +165,90 @@ export function drawLoot(ctx, lootItems, game) {
 }
 
 export function drawCameraCones(ctx, cameras) {
-  // Session 2 adds sweep cones; cameras are passed in for that work.
-  void ctx; void cameras;
+  if (!cameras) return;
+  for (const cam of cameras) {
+    if (cam.disabled) continue;
+    const facing = typeof cam.facing === "number" ? cam.facing : cam.baseAngle || 0;
+    const poly = conePolygon(cam.x, cam.y, facing, 28, 200);
+    ctx.save();
+    ctx.fillStyle = cam.seesPlayer ? "rgba(255,80,60,0.25)" : "rgba(120,220,255,0.13)";
+    ctx.beginPath();
+    ctx.moveTo(poly[0].x, poly[0].y);
+    for (let i = 1; i < poly.length; i++) ctx.lineTo(poly[i].x, poly[i].y);
+    ctx.closePath(); ctx.fill(); ctx.restore();
+  }
 }
 
-export function drawCameras(ctx) {
-  drawCameraCones(ctx, CAMERAS);
-  for (const camera of CAMERAS) {
+export function drawVisionCones(ctx, guards) {
+  if (!guards) return;
+  for (const g of guards) {
+    const range = 230;
+    const poly = conePolygon(g.x, g.y, g.facing, 35, range);
+    ctx.save();
+    ctx.fillStyle = g.state === "alert" ? "rgba(255,70,50,0.28)" : (g.state === "suspicious" || g.state === "investigate") ? "rgba(255,150,50,0.22)" : "rgba(255,230,120,0.16)";
+    ctx.beginPath();
+    ctx.moveTo(poly[0].x, poly[0].y);
+    for (let i = 1; i < poly.length; i++) ctx.lineTo(poly[i].x, poly[i].y);
+    ctx.closePath(); ctx.fill(); ctx.restore();
+  }
+}
+
+export function drawGuards(ctx, guards) {
+  if (!guards) return;
+  for (const g of guards) {
+    ctx.save(); ctx.translate(g.x, g.y);
+    ctx.beginPath(); ctx.arc(0, 0, 11, 0, Math.PI * 2);
+    ctx.fillStyle = "#24407a"; ctx.fill();
+    ctx.strokeStyle = "#0d1a33"; ctx.lineWidth = 2; ctx.stroke();
+    // Cap brim toward facing
+    ctx.save(); ctx.rotate(g.facing);
+    ctx.fillStyle = "#101c38"; ctx.fillRect(4, -6, 9, 12);
+    ctx.restore();
+    ctx.restore();
+    // Suspicion arc + indicator
+    if (g.suspicion > 0.02) {
+      ctx.save(); ctx.strokeStyle = g.state === "alert" ? "#ff5147" : "#ffb347"; ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.arc(g.x, g.y, 16, -Math.PI / 2, -Math.PI / 2 + g.suspicion * Math.PI * 2); ctx.stroke(); ctx.restore();
+    }
+    if (g.state === "alert") {
+      ctx.fillStyle = "#ff5147"; ctx.font = "bold 20px sans-serif"; ctx.textAlign = "center";
+      ctx.fillText("!", g.x, g.y - 22); ctx.textAlign = "left";
+    } else if (g.state === "suspicious" || g.state === "investigate" || g.suspicion > 0.25) {
+      ctx.fillStyle = "#ffb347"; ctx.font = "bold 18px sans-serif"; ctx.textAlign = "center";
+      ctx.fillText("?", g.x, g.y - 22); ctx.textAlign = "left";
+    }
+  }
+}
+
+export function drawVaultCrack(ctx, crack) {
+  if (!crack || !crack.active) return;
+  const cx = VAULT_DOOR.x + VAULT_DOOR.w / 2, cy = VAULT_DOOR.y + VAULT_DOOR.h / 2;
+  ctx.save();
+  ctx.fillStyle = "rgba(5,8,14,0.55)"; ctx.beginPath(); ctx.arc(cx, cy, 58, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = "#c7d0e4"; ctx.lineWidth = 4; ctx.beginPath(); ctx.arc(cx, cy, 52, 0, Math.PI * 2); ctx.stroke();
+  // Green zone (needleAngle range -2.35..2.35 maps onto dial arc starting at top)
+  const toDial = (a) => -Math.PI / 2 + a;
+  ctx.strokeStyle = "#3fae5a"; ctx.lineWidth = 10;
+  ctx.beginPath(); ctx.arc(cx, cy, 46, toDial(crack.zoneStart), toDial(crack.zoneStart + crack.zoneWidth)); ctx.stroke();
+  // Needle
+  const na = toDial(crack.needleAngle);
+  ctx.strokeStyle = "#ffd94d"; ctx.lineWidth = 3; ctx.beginPath();
+  ctx.moveTo(cx, cy); ctx.lineTo(cx + Math.cos(na) * 50, cy + Math.sin(na) * 50); ctx.stroke();
+  ctx.beginPath(); ctx.arc(cx, cy, 5, 0, Math.PI * 2); ctx.fillStyle = "#ffd94d"; ctx.fill();
+  // Tumbler pips
+  for (let i = 0; i < 3; i++) {
+    ctx.beginPath(); ctx.arc(cx - 20 + i * 20, cy + 68, 6, 0, Math.PI * 2);
+    ctx.fillStyle = i < crack.tumblers ? "#3fae5a" : "rgba(255,255,255,0.3)"; ctx.fill();
+  }
+  ctx.fillStyle = "#ffffff"; ctx.font = "bold 13px sans-serif"; ctx.textAlign = "center";
+  ctx.fillText("Press E in the green!", cx, cy + 92); ctx.textAlign = "left";
+  ctx.restore();
+}
+
+export function drawCameras(ctx, cameras) {
+  const list = cameras && cameras.length ? cameras : CAMERAS.map((c) => ({ ...c, facing: c.baseAngle, disabled: false }));
+  drawCameraCones(ctx, list);
+  for (const camera of list) {
     ctx.fillStyle = "#10131a";
     ctx.fillRect(camera.x - 7, camera.y - 7, 14, 14);
     ctx.strokeStyle = "#55628a";
@@ -178,7 +256,9 @@ export function drawCameras(ctx) {
     ctx.strokeRect(camera.x - 7, camera.y - 7, 14, 14);
     ctx.beginPath();
     ctx.arc(camera.x, camera.y, 3, 0, Math.PI * 2);
-    ctx.fillStyle = COLOURS.alarmRed;
+    if (camera.disabled) ctx.fillStyle = "#333a4a";
+    else if (camera.seesPlayer) ctx.fillStyle = (Math.floor((camera.blink || 0) * 6) % 2 === 0) ? COLOURS.alarmRed : "#ff9a8a";
+    else ctx.fillStyle = COLOURS.alarmRed;
     ctx.fill();
   }
 }
@@ -293,6 +373,24 @@ export function drawHUD(ctx, game, player) {
     ctx.textAlign = "right";
     ctx.fillText("POLICE " + Math.max(0, Math.ceil(game.policeTimer)) + "s", 1264, 28);
     ctx.textAlign = "left";
+  }
+  // GHOST tag + camera-disabled countdown
+  if (game.ghost) {
+    ctx.fillStyle = "#7fd4ff"; ctx.font = "bold 12px sans-serif";
+    ctx.fillText("GHOST", 16, 62);
+  }
+  if (game.camerasDisabledTimer > 0) {
+    ctx.fillStyle = "#7fd4ff"; ctx.font = "bold 12px sans-serif";
+    ctx.textAlign = "right";
+    ctx.fillText("CAMERAS OFF " + Math.ceil(game.camerasDisabledTimer) + "s", 1264, 62);
+    ctx.textAlign = "left";
+  }
+  // Big police countdown when tripped
+  if (game.tripped && typeof game.policeTimer === "number") {
+    ctx.save();
+    ctx.fillStyle = COLOURS.alarmRed; ctx.font = "bold 34px sans-serif"; ctx.textAlign = "center";
+    ctx.fillText("POLICE IN " + Math.max(0, Math.ceil(game.policeTimer)) + "s", 640, 86);
+    ctx.restore(); ctx.textAlign = "left";
   }
   // Objective line
   ctx.fillStyle = COLOURS.gold;
