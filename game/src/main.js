@@ -5,8 +5,9 @@ import { isDown, attach, consumeClick } from "./input.js";
 import {
   drawFloor, drawWalls, drawCover, drawVault, drawLoot, drawCameras,
   drawPanel, drawVan, drawPlayer, drawHUD, drawTitleScreen, drawPauseOverlay,
-  drawVisionCones, drawGuards, drawVaultCrack,
+  drawVisionCones, drawGuards, drawVaultCrack, drawObjectiveMarker,
 } from "./render.js";
+import { parseShotMode, stageShotScene } from "./shots.js";
 import { createGuards, updateGuards } from "./guards.js";
 import { createCameras, updateCameras, createPanelState, hackPanel, nearPanel } from "./cameras.js";
 import { createVaultCrack, startVaultCrack, cancelVaultCrack, updateVaultCrack } from "./vault.js";
@@ -27,6 +28,7 @@ function createGame() {
     time: 0, elapsed: 0, policeTimer: null, muted: false,
     vaultOpen: false, crackProgress: 0, loot: freshLoot(), seed, objective: null,
     caughtReason: "", score: null, camerasDisabledTimer: 0, footstepTimer: 0,
+    seenNow: false,
   };
 }
 
@@ -38,6 +40,16 @@ let alarmState = createAlarm();
 let crack = createVaultCrack();
 let panelState = createPanelState();
 let spottedFired = false;
+
+// --- Deterministic screenshot mode (?shot=play|vault|escape|end) ---
+// When present, stage the fixed scene once and freeze the simulation:
+// the frame loop renders the staged scene without ever calling update().
+const shot = parseShotMode();
+if (shot) {
+  if (Number.isFinite(shot.seed)) game.seed = shot.seed;
+  stageShotScene({ game, player, guards, cameras, alarmState, crack, panelState }, shot.mode);
+}
+
 let lastTime = performance.now();
 const pressedOnce = new Set();
 
@@ -148,6 +160,7 @@ function update(dt) {
     onBeep: () => audio.playCameraBeep(),
   });
   detecting = guardDetect || camDetect;
+  game.seenNow = detecting;
   game.camerasDisabledTimer = cameras.length ? Math.max(0, cameras[0].disabledTimer || 0) : 0;
 
   updateAlarm(alarmState, dt, detecting);
@@ -180,16 +193,25 @@ function update(dt) {
   }
 }
 
+function lootTallyText() {
+  const counts = {};
+  for (const item of player.carriedLoot || []) counts[item.kind] = (counts[item.kind] || 0) + 1;
+  const order = ["gold", "cash", "jewels", "bonds", "art"];
+  const parts = order.filter((k) => counts[k]).map((k) => k + " x" + counts[k]);
+  return parts.length ? parts.join(" \u00b7 ") : "no loot";
+}
 function drawScoreScreen() {
   const s = game.score || computeScore();
   ctx.fillStyle = "rgba(5,8,14,0.88)"; ctx.fillRect(0, 0, 1280, 720);
   ctx.fillStyle = "#ffd94d"; ctx.font = "bold 56px sans-serif"; ctx.textAlign = "center";
   ctx.fillText("CLEAN GETAWAY", 640, 230);
+  ctx.fillStyle = "#bff0c8"; ctx.font = "20px sans-serif";
+  ctx.fillText("Loot: " + lootTallyText() + " \u2014 $" + s.lootValue, 640, 262);
   ctx.fillStyle = "#ffffff"; ctx.font = "24px sans-serif";
   ctx.fillText("Loot value: $" + s.lootValue, 640, 290);
   ctx.fillText("Time bonus: $" + s.timeBonus + "  (" + game.elapsed.toFixed(1) + "s)", 640, 330);
-  ctx.fillText("GHOST bonus: $" + s.ghostBonus, 640, 370);
-  ctx.fillText("CLEAN bonus (alarm never tripped): $" + s.cleanBonus, 640, 410);
+  ctx.fillText(s.ghostBonus > 0 ? "GHOST bonus: $" + s.ghostBonus : "GHOST bonus: $0 \u2014 missed", 640, 370);
+  ctx.fillText(s.cleanBonus > 0 ? "CLEAN bonus (alarm never tripped): $" + s.cleanBonus : "CLEAN bonus: $0 \u2014 missed (alarm tripped)", 640, 410);
   ctx.fillStyle = "#ffd94d"; ctx.font = "bold 30px sans-serif";
   ctx.fillText("TOTAL SCORE: $" + s.total, 640, 465);
   ctx.font = "20px sans-serif"; ctx.fillStyle = "#ffffff";
@@ -217,19 +239,27 @@ function render() {
   if (game.state === "title") { drawTitleScreen(ctx); return; }
   drawFloor(ctx); drawCover(ctx); drawPanel(ctx); drawVan(ctx);
   drawLoot(ctx, game.loot, game);
-  drawVault(ctx, game); drawWalls(ctx); drawVault(ctx, game);
+  drawWalls(ctx); drawVault(ctx, game);
   drawVisionCones(ctx, guards);
   drawCameras(ctx, cameras);
   drawGuards(ctx, guards);
   drawPlayer(ctx, player);
   drawVaultCrack(ctx, crack);
   drawPanelProgress();
+  drawObjectiveMarker(ctx, game, player);
   drawHUD(ctx, game, player);
   if (game.state === "paused") drawPauseOverlay(ctx);
   if (game.state === "won") drawScoreScreen();
   if (game.state === "caught") drawCaughtScreen();
 }
 function frame(now) {
+  if (shot) {
+    // Frozen shot mode: render the staged scene, never advance time.
+    render();
+    window.__shotReady = true;
+    requestAnimationFrame(frame);
+    return;
+  }
   const dt = Math.min(0.05, Math.max(0, (now - lastTime) / 1000));
   lastTime = now; update(dt); render(); requestAnimationFrame(frame);
 }

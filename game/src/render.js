@@ -332,6 +332,58 @@ export function drawPlayer(ctx, player) {
   ctx.restore();
 }
 
+// Off-screen objective marker: an arrow pinned to the screen edge pointing
+// toward the current objective (vault door while infiltrating/cracking, the
+// vault loot while looting, the getaway van while escaping). When the target
+// is on screen it becomes a small bobbing chevron above the target instead.
+export function drawObjectiveMarker(ctx, game, player) {
+  if (!game || game.state !== "playing") return;
+  let tx, ty, label;
+  if (game.phase === "loot") {
+    let best = null, bestD = Infinity;
+    for (const item of game.loot || []) {
+      if (item.taken) continue;
+      const d = Math.hypot(item.x - player.x, item.y - player.y);
+      if (d < bestD) { bestD = d; best = item; }
+    }
+    if (best) { tx = best.x; ty = best.y; label = "LOOT"; }
+    else { tx = VAULT_TARGET.x; ty = VAULT_TARGET.y; label = "VAULT"; }
+  } else if (game.phase === "escape" || game.tripped) {
+    tx = VAN.x + VAN.w / 2; ty = VAN.y + VAN.h / 2; label = "VAN";
+  } else {
+    tx = VAULT_DOOR.x + VAULT_DOOR.w / 2; ty = VAULT_DOOR.y + VAULT_DOOR.h / 2; label = "VAULT";
+  }
+  const colour = game.tripped ? COLOURS.alarmRed : COLOURS.gold;
+  const inset = 30;
+  const onScreen = tx > inset && tx < 1280 - inset && ty > 60 && ty < 720 - inset;
+  ctx.save();
+  ctx.fillStyle = colour;
+  ctx.strokeStyle = colour;
+  if (onScreen) {
+    const bob = Math.sin((game.time || 0) * 4) * 3;
+    const ay = ty - 26 + bob;
+    ctx.beginPath();
+    ctx.moveTo(tx - 8, ay); ctx.lineTo(tx + 8, ay); ctx.lineTo(tx, ay + 10);
+    ctx.closePath(); ctx.fill();
+  } else {
+    const cx = 640, cy = 360;
+    const ang = Math.atan2(ty - cy, tx - cx);
+    const mx = Math.max(inset, Math.min(1280 - inset, tx));
+    const my = Math.max(64, Math.min(720 - inset, ty));
+    ctx.translate(mx, my);
+    ctx.rotate(ang);
+    ctx.beginPath();
+    ctx.moveTo(14, 0); ctx.lineTo(-8, -9); ctx.lineTo(-3, 0); ctx.lineTo(-8, 9);
+    ctx.closePath(); ctx.fill();
+    ctx.rotate(-ang);
+    ctx.font = "bold 10px sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText(label, 0, 24);
+  }
+  ctx.restore();
+  ctx.textAlign = "left";
+}
+
 function objectiveForPhase(phase) {
   if (phase === "infiltrate") return "Reach the vault";
   if (phase === "crack") return "Crack the vault: hold E at the door";
@@ -374,10 +426,23 @@ export function drawHUD(ctx, game, player) {
     ctx.fillText("POLICE " + Math.max(0, Math.ceil(game.policeTimer)) + "s", 1264, 28);
     ctx.textAlign = "left";
   }
+  // Spotted eye indicator: SEEN! flashes red while any guard or camera
+  // currently sees the thief, HIDDEN sits quiet otherwise.
+  if (game.state === "playing" || game.seenNow) {
+    ctx.font = "bold 12px sans-serif";
+    if (game.seenNow) {
+      const flashOn = Math.floor((game.time || 0) * 4) % 2 === 0;
+      ctx.fillStyle = flashOn ? COLOURS.alarmRed : "#ff9a8a";
+      ctx.fillText("\u25c9 SEEN!", 16, 62);
+    } else {
+      ctx.fillStyle = "rgba(120,220,160,0.75)";
+      ctx.fillText("\u25ce HIDDEN", 16, 62);
+    }
+  }
   // GHOST tag + camera-disabled countdown
   if (game.ghost) {
     ctx.fillStyle = "#7fd4ff"; ctx.font = "bold 12px sans-serif";
-    ctx.fillText("GHOST", 16, 62);
+    ctx.fillText("GHOST", 116, 62);
   }
   if (game.camerasDisabledTimer > 0) {
     ctx.fillStyle = "#7fd4ff"; ctx.font = "bold 12px sans-serif";
